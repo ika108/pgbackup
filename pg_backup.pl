@@ -33,7 +33,7 @@ my $pg_dumpfile;
 my $error_level = 0;
 
 
-my $DEBUG = 1;
+my $DEBUGLEVEL = 3;
 
 
 
@@ -46,7 +46,7 @@ $SIG{INT} = sub {
 
 sub run {
     if(grep(/-v/,@ARGV)){
-        $DEBUG = 1;
+        $DEBUGLEVEL = 3;
         &debug(0);
     }
     &debug(1);
@@ -79,13 +79,12 @@ sub get_params {
         &HELP_MESSAGE;
         exit(1);
     }
-    if($DEBUG){
-        my $argstring = 'ARGV: ';
-        foreach my $arg (keys(%opts)){
-            $argstring .= "{$arg => $opts{$arg}}";
-        }
-        debug(4,$argstring);
+    my $argstring = 'ARGV: ';
+    foreach my $arg (keys(%opts)){
+        $argstring .= "{$arg => $opts{$arg}}";
     }
+    &debug(4,$argstring);
+
     if($opts{'ARGV'} and ! (-w $opts{'ARGV'}) ){
         &error
     }
@@ -261,41 +260,48 @@ sub debug {
     my @args = @_;
     my %messages = {
 		'VERBOSE'  => [1,'Verbose mode activated'],
-		'START'    => [0,'Starting run'],
-		'END'      => [0,'End running'],
-		'GETOPTS'  => [0,'Fetching getopts'],
-		'ARGV'     => [0,'ARGV : %s'],
-		'FULLDUMP' => [0,'Full dump'],
+		'START'    => [2,'Starting run'],
+		'END'      => [2,'End running'],
+		'GETOPTS'  => [2,'Fetching getopts'],
+		'ARGV'     => [2,'ARGV : %s'],
+		'FULLDUMP' => [2,'Full dump'],
 		'CAUGHT'   => [1,'Caught : %s'],
-		'CALLWR'   => [0,'Calling write_runner thread'],
-		'CALLDR'   => [0,'Calling dump_runner thread'],
-		'WAITDR'   => [0,'Waiting for dump_runner to finish'],
-		'ENDDR'    => [0,'dump_runner has finished'],
-		'STOPWR'   => [0,'Asking write_runner to stop'],
-		'WAITWR'   => [0,'Waiting for write_runner to finish'],
-		'ENDWR'    => [0,'write_runner has finished'],
-		'HELP'     => [0,'Calling for help'],
-		'STARTDR'  => [0,'Starting dump thread %s'],
-		'CMD'      => [0,'Starting command : %s'],
+		'CALLWR'   => [2,'Calling write_runner thread'],
+		'CALLDR'   => [2,'Calling dump_runner thread'],
+		'WAITDR'   => [2,'Waiting for dump_runner to finish'],
+		'ENDDR'    => [2,'dump_runner has finished'],
+		'STOPWR'   => [2,'Asking write_runner to stop'],
+		'WAITWR'   => [2,'Waiting for write_runner to finish'],
+		'ENDWR'    => [2,'write_runner has finished'],
+		'HELP'     => [2,'Calling for help'],
+		'STARTDR'  => [2,'Starting dump thread %s'],
+		'CMD'      => [2,'Starting command : %s'],
 		'DRYRUN'   => [1,'Dryrun : %s'],
-		'ERREXEC'  => [2,'Something wrong has happened while executing %s : %s : %s'],
+		'ERREXEC'  => [0,'Something wrong has happened while executing %s : %s : %s'],
 		'BINMODE'  => [1,'Couldn\'t set binmode on program\'s STDOUT : %s'],
-		'STDIN'    => [0,'Closing STDIN for safety as we don\'t need it'],
-		'DIEDR'    => [2,'dump_runner as been asked to die'],
-		'EXITCMD'  => [0,'pg_dump exited with exit code : %s'],
-		'STDOEOF'  => [0,'STDOUT eof reached'],
-		'STDEEOF'  => [0,'STDERR eof reached'],
-		'ERRUKN'   => [2,'Something very wrong has happened'],
-		'CLOSEFH'  => [0,'Closing all remaining file handles'],
+		'STDIN'    => [2,'Closing STDIN for safety as we don\'t need it'],
+		'DIEDR'    => [0,'dump_runner as been asked to die'],
+		'EXITCMD'  => [2,'pg_dump exited with exit code : %s'],
+		'STDOEOF'  => [2,'STDOUT eof reached'],
+		'STDEEOF'  => [2,'STDERR eof reached'],
+		'ERRUKN'   => [0,'Something very wrong has happened'],
+		'CLOSEFH'  => [2,'Closing all remaining file handles'],
 		'STDERR'   => [1,'STDERR : %s'],
-		'LEAVEDR'  => [0,'Leaving dump_runner'], 
-		'STARTWR'  => [0,'Starting write_runner'],
-		'OPEN'     => [0,'Opening %s'],
-		'ERROUT'   => [2,'Something wrong has happened while trying to write output file %s : %s'],
-		'FLUSHBUF' => [0,'Flushing buffer'],
-		'EXITWR'   => [0,'Exiting write_runner']};
-    if($error_level < $messages{$msg}->[0]){$error_level = $messages{$msg}->[0]}
-    $msg =~ s/\n//;
+		'LEAVEDR'  => [2,'Leaving dump_runner'], 
+		'STARTWR'  => [2,'Starting write_runner'],
+		'OPEN'     => [2,'Opening %s'],
+		'ERROUT'   => [0,'Something wrong has happened while trying to write output file %s : %s'],
+		'FLUSHBUF' => [2,'Flushing buffer'],
+		'EXITWR'   => [2,'Exiting write_runner']};
+    my @loglevel = ('ERROR','WARNING','NOTIFY','DEBUG');
+    if($error_level > $messages{$msg}->[0]){$error_level = $messages{$msg}->[0]}
+    if(@args){
+        for(my $index = 0; $index <= scalar(@args) - 1; $index++){
+                $args[$index] =~ s/\n//;
+        }
+    }
+    
+    $msg = $messages{$msg}->[1];
     if($DEBUG){print STDERR ("[$$-".time."] $msg\n")}
     return;
 }
