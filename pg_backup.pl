@@ -30,9 +30,12 @@ my $format = 'p';
 my $pg_params = '';
 my $pg_db = '';
 my $pg_dumpfile;
+my $error_level = 0;
 
 
 my $DEBUG = 1;
+
+
 
 $SIG{INT} = sub {
     print('kill int as been called\n');
@@ -44,9 +47,9 @@ $SIG{INT} = sub {
 sub run {
     if(grep(/-v/,@ARGV)){
         $DEBUG = 1;
-        &debug('Verbose mode activated');
+        &debug(0);
     }
-    &debug('Starting run');
+    &debug(1);
     my $params = &get_params();
     if($params->{'h'}){&HELP_MESSAGE}
     if($params->{'d'}){$dry_run = 1}
@@ -61,13 +64,14 @@ sub run {
     	$pg_dump .= 'all';
     	$pg_dumpfile = "$pg_dump/db-all-".time;
     }
-    &bck_dump();
-    &debug('End running');
+    my $backup_state = &bck_dump();
+    &bck_rotate();
+    &debug(2);
     exit(0);
 }
 
 sub get_params {
-    &debug('Fetching getopts');
+    &debug(3);
     my %opts;
     getopts('vhdif:D:kx:', \%opts);
     if($ARGV[$#ARGV]){$opts{'ARGV'} = pop(@ARGV)}
@@ -80,7 +84,7 @@ sub get_params {
         foreach my $arg (keys(%opts)){
             $argstring .= "{$arg => $opts{$arg}}";
         }
-        debug($argstring);
+        debug(4,$argstring);
     }
     if($opts{'ARGV'} and ! (-w $opts{'ARGV'}) ){
         &error
@@ -89,7 +93,7 @@ sub get_params {
 }
 
 sub bck_dump {
-    &debug('Full dump');
+    &debug(5);
 
     # Setting some threaded shared variables
     my $buffer :shared;
@@ -124,10 +128,20 @@ sub bck_dump {
         	# binmode my not be necessary, but as we process binary data (globs)
         	# better safe than sorry
         	eval{no warnings 'all' ; binmode(IPCSTDOUT)};
-        	if($@){&debug("Caught $@")}
+        	if($@){
+        		if($dry_run){
+        			&debug(6,$@);
+        		}else{
+        			&debug("Couldn't set binmode on program's STDOUT : $@");
+        		}
+        	}
         	&debug('[D]Closing STDIN for safety as we don\'t need it');
         	eval{close(IPCSTDIN)};
-        	if($@){&debug("Caught $@")}
+        	if($@){
+        		if($dry_run){
+        			
+        		}
+        		&debug(6,$@)}
         	# We create a FH selector in order to swap between the STDOUT and
  	        # STDERR of the command
         	my $fh_selector = IO::Select->new();
@@ -136,7 +150,7 @@ sub bck_dump {
         	my($outeof,$erreof) = (1,1); # This is to control the eof of our FH
 	        # We connect STDOUT and STDERR to our FH selector
         	eval{$fh_selector->(*IPCSTDOUT,*IPCSTDERR)};
-        	if($@){&debug("Caught $@")}
+        	if($@){&debug(6,$@)}
 	        # Now start the big loop...
 	        # We actually loop aroung the availability of data in our FH
         	while(@fh_ready = $fh_selector->can_read()){
@@ -244,6 +258,43 @@ sub bck_rotate {}
 
 sub debug {
     my $msg = shift;
+    my @args = @_;
+    my %messages = {
+		'VERBOSE'  => [1,'Verbose mode activated'],
+		'START'    => [0,'Starting run'],
+		'END'      => [0,'End running'],
+		'GETOPTS'  => [0,'Fetching getopts'],
+		'ARGV'     => [0,'ARGV : %s'],
+		'FULLDUMP' => [0,'Full dump'],
+		'CAUGHT'   => [1,'Caught : %s'],
+		'CALLWR'   => [0,'Calling write_runner thread'],
+		'CALLDR'   => [0,'Calling dump_runner thread'],
+		'WAITDR'   => [0,'Waiting for dump_runner to finish'],
+		'ENDDR'    => [0,'dump_runner has finished'],
+		'STOPWR'   => [0,'Asking write_runner to stop'],
+		'WAITWR'   => [0,'Waiting for write_runner to finish'],
+		'ENDWR'    => [0,'write_runner has finished'],
+		'HELP'     => [0,'Calling for help'],
+		'STARTDR'  => [0,'Starting dump thread %s'],
+		'CMD'      => [0,'Starting command : %s'],
+		'DRYRUN'   => [1,'Dryrun : %s'],
+		'ERREXEC'  => [2,'Something wrong has happened while executing %s : %s : %s'],
+		'BINMODE'  => [1,'Couldn\'t set binmode on program\'s STDOUT : %s'],
+		'STDIN'    => [0,'Closing STDIN for safety as we don\'t need it'],
+		'DIEDR'    => [2,'dump_runner as been asked to die'],
+		'EXITCMD'  => [0,'pg_dump exited with exit code : %s'],
+		'STDOEOF'  => [0,'STDOUT eof reached'],
+		'STDEEOF'  => [0,'STDERR eof reached'],
+		'ERRUKN'   => [2,'Something very wrong has happened'],
+		'CLOSEFH'  => [0,'Closing all remaining file handles'],
+		'STDERR'   => [1,'STDERR : %s'],
+		'LEAVEDR'  => [0,'Leaving dump_runner'], 
+		'STARTWR'  => [0,'Starting write_runner'],
+		'OPEN'     => [0,'Opening %s'],
+		'ERROUT'   => [2,'Something wrong has happened while trying to write output file %s : %s'],
+		'FLUSHBUF' => [0,'Flushing buffer'],
+		'EXITWR'   => [0,'Exiting write_runner']};
+    if($error_level < $messages{$msg}->[0]){$error_level = $messages{$msg}->[0]}
     $msg =~ s/\n//;
     if($DEBUG){print STDERR ("[$$-".time."] $msg\n")}
     return;
