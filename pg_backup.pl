@@ -11,6 +11,7 @@ use threads::shared;
 use Thread::Semaphore;
 use Time::HiRes qw(usleep);
 
+
 our $VERSION = 0.9;
 
 my @notify_rcpt = qw(some_email@toto.com);
@@ -64,7 +65,8 @@ sub run {
     	$pg_dump .= 'all';
     	$pg_dumpfile = "$pg_dump/db-all-".time;
     }
-    my $backup_state = &bck_dump();
+    my @backup_state = &bck_dump();
+    print("ERR LEVEL : $error_level\n");
     &bck_rotate();
     &debug(2);
     exit(0);
@@ -83,7 +85,7 @@ sub get_params {
     foreach my $arg (keys(%opts)){
         $argstring .= "{$arg => $opts{$arg}}";
     }
-    &debug(4,$argstring);
+    &debug('GETOPTS',$argstring);
 
     if($opts{'ARGV'} and ! (-w $opts{'ARGV'}) ){
         &error
@@ -92,7 +94,7 @@ sub get_params {
 }
 
 sub bck_dump {
-    &debug(5);
+    &debug('FULLDUMP');
 
     # Setting some threaded shared variables
     my $buffer :shared;
@@ -104,14 +106,14 @@ sub bck_dump {
 
     # This is the block for the pg_dump thread
     my $dump_runner = sub {
-        &debug('[D]Starting dump thread');
+        &debug('STARTDR',threads->tid());
         my $pgdcmd = "$pg_dump $pg_db --create -F $format $pg_params";
-        &debug("[D]Starting command : $pgdcmd");
+        &debug('CMD',$pgdcmd);
         my $pgdpid;
         # We use open3 instead of open because we need to catch every FH
         eval {
 			if($dry_run){
-				&debug("[D]Dryrun : $pgdcmd");
+				&debug('DRYDUN',$pgdcmd);
 			}else{
             	$pgdpid = open3(\*IPCSTDIN,\*IPCSTDOUT,\*IPCSTDERR,$pgdcmd);
 			}
@@ -119,7 +121,7 @@ sub bck_dump {
         if($@){
             # open3 has failed, no point going further.
             my $stderr = join('/',<IPCSTDERR>);
-            &debug("[D]Something wrong has happened while executing $pgdcmd : $@ : $stderr");
+            &debug('ERREXEC',$pgdcmd, $@, $stderr);
             close(IPCSTDIN);
             close(IPCSTDOUT);
             close(IPCSTDERR);
@@ -129,18 +131,19 @@ sub bck_dump {
         	eval{no warnings 'all' ; binmode(IPCSTDOUT)};
         	if($@){
         		if($dry_run){
-        			&debug(6,$@);
+        			&debug('CAUGHT',$@);
         		}else{
-        			&debug("Couldn't set binmode on program's STDOUT : $@");
+        			&debug('BINMODE',$@);
         		}
         	}
-        	&debug('[D]Closing STDIN for safety as we don\'t need it');
+        	&debug('STDIN');
         	eval{close(IPCSTDIN)};
         	if($@){
         		if($dry_run){
         			
         		}
-        		&debug(6,$@)}
+        		&debug('CAUGHT',$@);
+        	}
         	# We create a FH selector in order to swap between the STDOUT and
  	        # STDERR of the command
         	my $fh_selector = IO::Select->new();
@@ -149,20 +152,20 @@ sub bck_dump {
         	my($outeof,$erreof) = (1,1); # This is to control the eof of our FH
 	        # We connect STDOUT and STDERR to our FH selector
         	eval{$fh_selector->(*IPCSTDOUT,*IPCSTDERR)};
-        	if($@){&debug(6,$@)}
+        	if($@){&debug('CAUGHT',$@)}
 	        # Now start the big loop...
 	        # We actually loop aroung the availability of data in our FH
         	while(@fh_ready = $fh_selector->can_read()){
             	if($read_ctrl == 0){
                 	# The thread enter this place whenever someone outside ask it
 	                # to stop
-                	&debug('[D]dump_runner as been asked to die');
+                	&debug('DIEDR');
 	                # We need to kill pg_dump and wait for its corpse to rest in
 	                # peace
     	            kill(2,$pgdpid);
         	        waitpid($pgdpid,0);
             	    $exitcode = $? >> 8;
-                	&debug("[D]pg_dump exited with exit code : $exitcode");
+                	&debug('EXITCMD',$exitcode);
                 	threads->exit();
 	            }
     	        foreach my $fh (@fh_ready){
@@ -175,19 +178,20 @@ sub bck_dump {
                     	if($outeof == 0){
                         	# We have reached STDOUT eof
                         	$fh_selector->remove($fh);
-                        	&debug('[D]STDOUT eof reached');
+                        	&debug('STDOEOF');
                     	}
                 	}
                 	elsif(fileno($fh) == fileno(IPCSTDERR)){
                     	# Same stuff, different FH...
                     	my $rbuf;
                     	$erreof = sysread($fh,$rbuf,$blk_size);
+                    	$errors .= $rbuf;
                     	if($erreof == 0){
 	                        $fh_selector->remove($fh);
-    	                    &debug('[D]STDERR eof reached');
+    	                    &debug('STDEEOF');
         	            }
             	    }else{
-                	    &debug('[D]Something very wrong has happened');
+                	    &debug('ERRUKN');
                 	}
             	}
             	# Let's try to get a lock on the shared buffer to purge the local
@@ -200,54 +204,55 @@ sub bck_dump {
         	}
         	waitpid(sub{if($pgdpid){return($pgdpid)}},0);
         	$exitcode = $? >> 8;
-        	&debug("[D]pg_dump exited with exit code : $exitcode");
-        	&debug('[D]Closing all remaining file handles');
+        	&debug('EXITCMD',$exitcode);
+        	&debug('CLOSEFH');
         	close(IPCSTDOUT);
         	close(IPCSTDERR);
         	if($errors){
-	            &debug("[D]STDERR : $errors");
+	            &debug('STDERR',$errors);
         	}
-        	&debug('[D]Leaving dump_runner');
+        	&debug('LEAVEDR');
         }
     };
 
     # This is the thread to handle the actual data writting
     my $write_runner = sub {
-        &debug('[W]Starting write_runner');
-        &debug("[W]Opening $pg_dumpfile");
+        &debug('STARTWR');
+        &debug('OPEN',$pg_dumpfile);
         eval {open(OUT,'>',$pg_dumpfile) or die($!)};
         if($@){
             # open has failed. No point going further.
-            &debug("[W]Something wrong has happened while trying to write output file $pg_dumpfile: $@");
+            &debug('ERROUT',$pg_dumpfile,$@);
         }else{
         	while($write_ctrl or $buffer){
             	if($buffer){
                 	$buffer_semaphore->down();
-                	&debug('[W]Flushing buffer');
+                	&debug('FLUSHBUF');
                 	print OUT ($buffer);
                 	$buffer = '';
                 	$buffer_semaphore->up();
             	}
             	usleep($flush_delay);
         	}
-        	&debug('[W]Exiting write_runner');
+        	&debug('EXITWR');
         	close(OUT);
         }
     };
 
     # Threads control block
-    &debug('Calling write_runner thread');
+    &debug('CALLWR');
     my $write_thr = threads->create($write_runner);
-    &debug('Calling dump_runner thread');
+    &debug('CALLDR');
     my $dump_thr = threads->create($dump_runner);
-    &debug('Waiting for dump_runner to finish');
+    &debug('WAITDR');
     $dump_thr->join();
-    &debug('dump_runner has finished');
-    &debug('Asking write_runner to stop');
+    &debug('ENDDR');
+    &debug('STOPWR');
     $write_ctrl = 0;
-    &debug('Waiting for write_runner to finish');
+    &debug('WAITWR');
     $write_thr->join();
-    &debug('write_runner has finished');
+    &debug('ENDWR');
+    return($exitcode,)
 }
 
 sub bck_restore {}
@@ -294,15 +299,15 @@ sub debug {
 		'FLUSHBUF' => [2,'Flushing buffer'],
 		'EXITWR'   => [2,'Exiting write_runner']};
     my @loglevel = ('ERROR','WARNING','NOTIFY','DEBUG');
-    if($error_level > $messages{$msg}->[0]){$error_level = $messages{$msg}->[0]}
+    if($error_level > $messages{$msg}->[0]){$error_level = $messages{$msg}->[0]} # lower global error level
     if(@args){
         for(my $index = 0; $index <= scalar(@args) - 1; $index++){
                 $args[$index] =~ s/\n//;
         }
     }
     
-    $msg = $messages{$msg}->[1];
-    if($DEBUG){print STDERR ("[$$-".time."] $msg\n")}
+    $msg = sprintf($messages{$msg}->[1],@args);
+    if($DEBUGLEVEL){print STDERR ("[$$-".time."] $msg\n")}
     return;
 }
 
