@@ -2,7 +2,7 @@
 
 # Load additional library
 use strict;
-use DBI;
+# use DBI;
 use Getopt::Std;
 use IPC::Open3;
 use IO::Select;
@@ -15,33 +15,30 @@ use Time::HiRes qw(usleep);
 
 our $VERSION = 0.9;
 
-my @notify_rcpt = qw(some_email@toto.com);
-my $start_time = time;
-my $db_params = 'postgres';
-my $table_params = 'public.parameter';
-my $pg_service = '/etc/sysconfig/pgsql/pg_service.conf';
-my $pg_conf = '/etc/postgresql.conf';
+my @notify_rcpt = qw(git@nimporteou.net);
 my $pg_dumpdir = '/dump';
 my $pg_dump = '/usr/bin/pg_dump';
 my $pg_restore = '/usr/bin/pg_restore';
-my $pg_blk_size = 128;
 my $blk_size = 1024;
 my $flush_delay = 100000; # In microsecond = 0.1 second
-my $retention = 8; # Retain 8 sucessfull instances
+my $retention = 4; # Retain 8 sucessfull instances
+my $mindelay = 172800; # Don't delete file not older than 48 hours
 my $dry_run = 0;
 my $format = 'p';
 my $pg_params = '';
 my $pg_db = '';
 my $pg_dumpfile;
 my $error_level :shared = 3;
+my $panic :shared;
+my $keep = 0;
 my @loglevel = ('ERROR','WARNING','NOTIFY','DEBUG');
 my $DEBUGLEVEL = 3;
 
 
 
 $SIG{INT} = sub {
-    print('kill int as been called\n');
-    exit(254);
+    &debug('INT');
+    $panic = 1;
 };
 
 &run();
@@ -57,7 +54,7 @@ sub run {
     if($params->{'d'}){$dry_run = 1}
     if($params->{'i'}){}
     if($params->{'f'}){$format = $params->{'F'}}
-    if($params->{'k'}){}
+    if($params->{'k'}){$keep = 1}
     if($params->{'x'}){$pg_params = $params->{'x'}}
     if($params->{'D'}){
         $pg_db = $params->{'D'};
@@ -68,9 +65,9 @@ sub run {
     }
     my $backup_state = &bck_dump($params);
     &debug('LOGLVL',$loglevel[$error_level]);
-    if($error_level == 1){&debug('WARNING')} 
-    elsif($error_level == 0){&debug('ERROR')}
-    else{&bck_rotate() }
+    if($error_level == 1){&debug('WARNING'); rename($pg_dumpfile,"$pg_dumpfile-WARNING")} 
+    elsif($error_level == 0){&debug('ERROR'); rename($pg_dumpfile,"$pg_dumpfile-ERROR")}
+    else{&bck_rotate()}
     &debug('END');
     exit(0);
 }
@@ -120,7 +117,7 @@ sub bck_dump {
 	}else{
 	    if($params->{'D'}){&debug('DRYRUN',"$pg_dump $pg_db -F $format --create $pg_params")}
 	    else{&debug('DRYRUN',"$pg_dump $pg_params")}
-	    $pgdcmd = "/bin/dd if=/dev/zero bs=1 count=1048576";
+	    $pgdcmd = "/bin/dd if=/dev/zero bs=1 count=1048576 2>&1";
 	}
         &debug('CMD',$pgdcmd);
         my $pgdpid;
@@ -172,11 +169,13 @@ sub bck_dump {
                     # peace
 		    if($dry_run){$exitcode = 0}
 		    else{
+			&debug('NOTIFY',"Killing $pgdpid");
                         kill(2,$pgdpid);
                         waitpid($pgdpid,0);
-                        $exitcode = $? >> 8;
+                        $exitcode = $?;
 		    }
                     &debug('EXITCMD',$exitcode);
+		    if($exitcode > 0){&debug('UNXPEND')}
                     threads->exit();
                 }
                 foreach my $fh (@fh_ready){
@@ -208,18 +207,20 @@ sub bck_dump {
                 # Let's try to get a lock on the shared buffer to purge the local
                 # read buffer
                 $buffer_semaphore->down();
-		    # &debug('LOCK');
-                    if($read_buffer){$buffer .= $read_buffer}
-                    $read_buffer = '';
-                    $buffer_semaphore->up();
-                
+	        # &debug('LOCK');
+		if($read_buffer){$buffer .= $read_buffer}
+		$read_buffer = '';
+		$buffer_semaphore->up();
+		if($panic){$read_ctrl = 0}
             }
 	    if($dry_run){$exitcode = 0}
 	    else{
+		&debug('NOTIFY',"Waiting $pgdpid");
 	        waitpid($pgdpid,0);
-                $exitcode = $? >> 8;
+                $exitcode = $?;
 	    }
             &debug('EXITCMD',$exitcode);
+	    if($exitcode > 0){&debug('UNXPEND')}
             &debug('CLOSEFH');
             close(IPCSTDOUT);
             close(IPCSTDERR);
@@ -275,22 +276,29 @@ sub bck_dump {
 }
 
 sub bck_restore {}
-sub notify {}
-sub error {}
+
 sub bck_rotate {
 	&debug('ROTATE');
 	$pg_dumpfile =~ m/^(.*-)\d+$/;
 	my $fileprefix = $1;
-	&debug('NOTIFY',"Fileprefix : $fileprefix");
 	my %files;
 	no warnings 'File::Find';
-	find sub { if($File::Find::name =~ m/$fileprefix/){$files{} = $File::Find::name } } , $pg_dumpdir;
+	find sub { if($File::Find::name =~ m/$fileprefix(\d+)/){$files{$1} = $File::Find::name } } , $pg_dumpdir;
 	my @timestamps = sort {$b cmp $a} (keys(%files));
-	#splice(@timestamps,0,$retention);
+	splice(@timestamps,0,$retention);
 	foreach my $timestamp (@timestamps){
-		&debug('NOTIFY',"Should delete : ".$fileprefix.$timestamp);
+		if( ( ( time - $timestamp ) > $mindelay ) or $keep ){
+			&debug('DELETE',$fileprefix.$timestamp);
+			if(!$dry_run){
+				unlink($fileprefix.$timestamp);
+			}	
+		}else{
+			my @abbr = qw( Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec ); 
+			my @abbr1 = qw( Mon Tue Wed Thu Fri Sat Sun);
+			my @date = localtime($timestamp + $mindelay);
+			&debug('DELAY',$fileprefix.$timestamp, "$abbr1[$date[6]] $abbr[$date[4]] $date[3] ".sprintf($date[2]).":".sprintf($date[1]).":".$date[0]." ".($date[5] + 1900));
+		}
 	}
-	
 	return;
 }
 
@@ -339,6 +347,10 @@ sub debug {
 	'ERROR'	   => [0,'An error occured during backup execution. please check the logs and try again. (no rotation)'],
 	'ROTATE'   => [2,'Starting dump archives rotation'],
         'HELP'     => [2,'Calling for help'],
+	'DELETE'   => [2,'Deleting : %s'],
+	'DELAY'	   => [2,'Postponing %s deletation until %s'],
+	'INT'	   => [0,'Signal INT has been called'],
+	'UNXPEND'  => [0,'Unexpected end of command'],
 	'NOTIFY'   => [2,'Notify : %s']);
     # print("DEBUG : $messages{$msg}->[1] @args\n");
     if(!$messages{$msg}){print("BUG : $msg\n")}
@@ -360,12 +372,12 @@ sub HELP_MESSAGE {
     my $fh = shift;
     if(! $fh){$fh = *STDERR}
     print $fh ("Usage : $0 [OPTIONS] [PATH]\n");
-    print $fh ("Create an incremental or full dump of a postgres database,\n");
+    print $fh ("Create a full dump of a postgres database,\n");
     print $fh ("handling dump rotation for long time backup purpose\n");
     print $fh ("  -h\t\tThis help\n");
     print $fh ("  -v\t\tVerbose mode\n");
     print $fh ("  -d\t\tDry run. Don't modify or write anything\n");
-    print $fh ("  -i\t\tForce incremental backup\n");
+    # print $fh ("  -i\t\tForce incremental backup\n");
     print $fh ("  -f\t\tForce full backup\n");
     print $fh ("  -D base\tDatabase to backup (else all)\n");
     print $fh ("  -k\t\tForce to keep previous backup, even if they are expired\n");
