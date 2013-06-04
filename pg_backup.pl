@@ -2,39 +2,12 @@
 
 # Load additional library
 use strict;
-# use DBI;
 use Getopt::Std;
-use IPC::Open3;
-use IO::Select;
-use File::Find;
-use threads;
-use threads::shared;
-use Thread::Semaphore;
-use Time::HiRes qw(usleep);
-
 
 our $VERSION = 0.9;
 
 my @notify_rcpt = qw(git@nimporteou.net);
-my $pg_dumpdir = '/dump';
-my $pg_dump = '/usr/bin/pg_dump';
-my $pg_restore = '/usr/bin/pg_restore';
-my $blk_size = 1024;
-my $flush_delay = 100000; # In microsecond = 0.1 second
-my $retention = 4; # Retain 8 sucessfull instances
-my $mindelay = 172800; # Don't delete file not older than 48 hours
-my $dry_run = 0;
-my $format = 'p';
-my $pg_params = '';
-my $pg_db = '';
-my $pg_dumpfile;
-my $error_level :shared = 3;
-my $panic :shared;
-my $keep = 0;
-my @loglevel = ('ERROR','WARNING','NOTIFY','DEBUG');
-my $DEBUGLEVEL = 3;
-
-
+my $panic;
 
 $SIG{INT} = sub {
     &debug('INT');
@@ -56,13 +29,6 @@ sub run {
     if($params->{'f'}){$format = $params->{'F'}}
     if($params->{'k'}){$keep = 1}
     if($params->{'x'}){$pg_params = $params->{'x'}}
-    if($params->{'D'}){
-        $pg_db = $params->{'D'};
-        $pg_dumpfile = "$pg_dumpdir/db-$pg_db-".time;
-    }else{
-        $pg_dump .= 'all';
-        $pg_dumpfile = "$pg_dumpdir/db-all-".time;
-    }
     my $backup_state = &bck_dump($params);
     &debug('LOGLVL',$loglevel[$error_level]);
     if($error_level == 1){&debug('WARNING'); rename($pg_dumpfile,"$pg_dumpfile-WARNING")} 
@@ -75,17 +41,17 @@ sub run {
 sub get_params {
     &debug('GETOPTS');
     my %opts;
-    getopts('vhdif:D:kx:', \%opts);
-if($ARGV[$#ARGV]){$opts{'ARGV'} = pop(@ARGV)}
-if($ARGV[$#ARGV]){
-    &HELP_MESSAGE;
-    exit(1);
-}
-my $argstring;
-foreach my $arg (keys(%opts)){
-    $argstring .= "$arg => $opts{$arg}";
-}
-&debug('ARGV',$argstring);
+    getopts('qvhdif:D:kx:', \%opts);
+	if($ARGV[$#ARGV]){$opts{'ARGV'} = pop(@ARGV)}
+	if($ARGV[$#ARGV]){
+    	&HELP_MESSAGE;
+    	exit(1);
+	}
+	my $argstring;
+	foreach my $arg (keys(%opts)){
+    	$argstring .= "$arg => $opts{$arg}";
+	}
+	&debug('ARGV',$argstring);
 
 if($opts{'ARGV'} and ! (-w $opts{'ARGV'}) ){
     &error
@@ -303,66 +269,12 @@ sub bck_rotate {
 }
 
 sub debug {
-    my $msg = shift;
-    my @args = @_;
-    # print("DEBUG : $msg, @args\n");
-    my %messages = (
-        'VERBOSE'  => [1,'Verbose mode activated'],
-        'START'    => [2,'Starting run'],
-        'END'      => [2,'End running'],
-        'GETOPTS'  => [2,'Fetching getopts'],
-        'ARGV'     => [2,'ARGV : %s'],
-        'FULLDUMP' => [2,'Full dump'],
-        'CAUGHT'   => [1,'Caught : %s'],
-        'CALLWR'   => [2,'Calling write_runner thread'],
-        'CALLDR'   => [2,'Calling dump_runner thread'],
-        'WAITDR'   => [2,'Waiting for dump_runner to finish'],
-        'ENDDR'    => [2,'dump_runner has finished'],
-        'STOPWR'   => [2,'Asking write_runner to stop'],
-        'WAITWR'   => [2,'Waiting for write_runner to finish'],
-        'ENDWR'    => [2,'write_runner has finished'],
-        'HELP'     => [2,'Calling for help'],
-        'STARTDR'  => [2,'Starting dump thread %s'],
-        'CMD'      => [2,'Starting command : %s'],
-        'DRYRUN'   => [2,'Dryrun : %s'],
-        'ERREXEC'  => [0,'Something wrong has happened while executing %s : %s : %s'],
-        'BINMODE'  => [1,'Couldn\'t set binmode on program\'s STDOUT : %s'],
-        'STDIN'    => [2,'Closing STDIN for safety as we don\'t need it'],
-        'DIEDR'    => [0,'dump_runner as been asked to die'],
-        'EXITCMD'  => [2,'pg_dump exited with exit code : %d'],
-        'STDOEOF'  => [2,'STDOUT eof reached'],
-        'STDEEOF'  => [2,'STDERR eof reached'],
-        'ERRUKN'   => [0,'Something very wrong has happened'],
-        'CLOSEFH'  => [2,'Closing all remaining file handles'],
-        'STDERR'   => [1,'STDERR : %s'],
-        'LEAVEDR'  => [2,'Leaving dump_runner'],
-        'STARTWR'  => [2,'Starting write_runner'],
-        'OPEN'     => [2,'Opening %s'],
-        'LOCK'	   => [2,'Aquiring lock'],
-        'ERROUT'   => [0,'Something wrong has happened while trying to write output file %s : %s'],
-        'FLUSHBUF' => [2,'Flushing buffer : %s Bytes'],
-        'EXITWR'   => [2,'Exiting write_runner'],
-        'LOGLVL'   => [2,'Final errror level : %s'],
-        'WARNING'  => [1,'Some warning has occured. Please check the logs and try again. (no rotation)'],
-	'ERROR'	   => [0,'An error occured during backup execution. please check the logs and try again. (no rotation)'],
-	'ROTATE'   => [2,'Starting dump archives rotation'],
-        'HELP'     => [2,'Calling for help'],
-	'DELETE'   => [2,'Deleting : %s'],
-	'DELAY'	   => [2,'Postponing %s deletation until %s'],
-	'INT'	   => [0,'Signal INT has been called'],
-	'UNXPEND'  => [0,'Unexpected end of command'],
-	'NOTIFY'   => [2,'Notify : %s']);
-    # print("DEBUG : $messages{$msg}->[1] @args\n");
-    if(!$messages{$msg}){print("BUG : $msg\n")}
-    if($error_level > $messages{$msg}->[0]){$error_level = $messages{$msg}->[0]} # lower global error level
-    if(@args and ( $args[0] or $args[0] eq 0)){
-        for(my $index = 0; $index <= scalar(@args) - 1; $index++){
-            if($args[$index]){$args[$index] =~ s/\n//}
-        }
-        $msg = sprintf($messages{$msg}->[1],@args);
-    }
-    else{$msg = $messages{$msg}->[1]}
-    if($DEBUGLEVEL){printf STDERR ("[%i-%.6f] %s %s\n"),$$,Time::HiRes::time(),$loglevel[$error_level],$msg}
+
+
+
+
+
+
     return;
 }
 
@@ -374,6 +286,7 @@ sub HELP_MESSAGE {
     print $fh ("Usage : $0 [OPTIONS] [PATH]\n");
     print $fh ("Create a full dump of a postgres database,\n");
     print $fh ("handling dump rotation for long time backup purpose\n");
+    print $fh ("  -q\t\tQuiet mode\n");
     print $fh ("  -h\t\tThis help\n");
     print $fh ("  -v\t\tVerbose mode\n");
     print $fh ("  -d\t\tDry run. Don't modify or write anything\n");
