@@ -7,6 +7,7 @@ use File::Find;
 use threads;
 use threads::shared;
 use Thread::Semaphore;
+use File::ReadBackwards;
 
 our $VERSION = 0.9;
 
@@ -14,6 +15,8 @@ my $pg_write_dumpdir = '/dump';
 my $pg_write_flush_delay = 100000; # In microsecond = 0.1 second
 my $pg_write_retention = 4; # Retain 8 sucessfull instances
 my $pg_write_mindelay = 172800; # Don't delete file not older than 48 hours
+my $pg_dumpdb_pattern = '-- PostgreSQL database cluster dump complete';
+my $pg_dumpall_pattern = '-- PostgreSQL database dump complete';
 
 
 sub new {
@@ -31,6 +34,7 @@ sub new {
 	$self->{'PARAMS'} = shift;
 	$self->{'NOTIFIER'} = shift;
 	$self->{'THREAD'} = undef;
+	$self->{'ENDREACH'} = undef;
 	if($self->{'PARAMS'}->{'D'}){
 		$self->{'DUMPFILE'} = "$pg_write_dumpdir/db-".$self->{'PARAMS'}->{'D'}.'-'.time;
 		$self->{'DB'} = $self->{'PARAMS'}->{'D'};
@@ -128,6 +132,7 @@ sub end {
 	$self->{'NOTIFIER'}->notify('WAITWR');
 	${$self->{'STATE'}} = 'END';
 	$self->{'THREAD'}->join();
+
 }
 
 sub state {
@@ -149,6 +154,27 @@ sub buffer {
 sub written {
 	my $self = shift;
 	return(${$self->{'WRITTEN'}});
+}
+
+sub endreach {
+	my $self = shift;
+	my $linecount;
+	my $pattern;
+	if($self->{'PARAMS'}->{'D'}){
+		$pattern = $pg_dumpdb_pattern;
+	}else{
+		$pattern = $pg_dumpall_pattern;
+	}
+	my $bw = File::ReadBackwards->new($self->{'DUMPFILE'});
+	while($linecount < 10 and ! $bw->eof()){
+		if($bw->readline() =~ m/$pattern/){
+			$self->{'NOTIFIER'}->notify('ENDREACH');
+			$bw->close();
+			return(1);
+		}
+	}
+	$self->{'NOTIFIER'}->notify('CORRUPT');
+	return(0);
 }
 
 1;

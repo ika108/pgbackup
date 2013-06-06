@@ -27,6 +27,7 @@ my %messages = (
 	'UNXPEND'  => ['ERROR',		'Unexpected end of command'],
 	'ERROUT'   => ['ERROR',		'Something wrong has happened while trying to write output file %s : %s'],
 	'ERROR'	   => ['ERROR',		'An error occured during backup execution. please check the logs and try again. (no rotation)'],
+	'CORRUPT'  => ['ERROR',		'No end of dump markee found. The file is probably corrupted'],
 	'CAUGHT'   => ['WARNING',	'Caught : %s'],
 	'BINMODE'  => ['WARNING',	'Couldn\'t set binmode on program\'s STDOUT : %s'],
 	'STDERR'   => ['WARNING',	'STDERR : %s'],
@@ -65,6 +66,7 @@ my %messages = (
 	'FLUSHBUF' => ['DEBUG',		'Flushing buffer : %s Bytes'],
 	'EXITWR'   => ['DEBUG',		'Exiting write_runner'],
 	'HELP'     => ['DEBUG',		'Calling for help'],
+	'ENDREACH' => ['DEBUG',		'File content ended correctly'],
 	'DELAY'	   => ['DEBUG',		'Postponing %s deletation until %s']);
 
 
