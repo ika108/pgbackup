@@ -66,6 +66,11 @@ sub new {
 					lock(${$self->{'BUFFER'}});
 					$self->{'NOTIFIER'}->notify('FLUSHBUF',length(${$self->{'BUFFER'}}));
 					${$self->{'WRITTEN'}} += length(${$self->{'BUFFER'}});
+					if(! syswrite(OUT,${$self->{'BUFFER'}})){
+						$self->{'NOTIFIER'}->notify('ERROUT',$!);
+						close(OUT);
+						last;
+					}
 					print OUT (${$self->{'BUFFER'}});
 					${$self->{'BUFFER'}} = '';
 				}

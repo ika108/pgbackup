@@ -28,6 +28,7 @@ my %messages = (
 	'ERROUT'   => ['ERROR',		'Something wrong has happened while trying to write output file %s : %s'],
 	'ERROR'	   => ['ERROR',		'An error occured during backup execution. please check the logs and try again. (no rotation)'],
 	'CORRUPT'  => ['ERROR',		'No end of dump markee found. The file is probably corrupted'],
+	'ERRWRITE' => ['ERROR',		'Error writting to file : %s'],
 	'CAUGHT'   => ['WARNING',	'Caught : %s'],
 	'BINMODE'  => ['WARNING',	'Couldn\'t set binmode on program\'s STDOUT : %s'],
 	'STDERR'   => ['WARNING',	'STDERR : %s'],
